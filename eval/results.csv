@@ -1,1 +1,3 @@
-task,arm,run,success,tool_calls,input_tokens,output_tokens,wall_seconds,note
+task,arm,run,success,check_exit,sim_exit,untouched,tool_calls,turns,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,wall_seconds,stop,note
+cube-spin,cli,1,1,0,0,1,3,4,8,754,42513,3165,0.0246,13.4,ok,
+cube-spin,bridge,1,1,0,0,1,7,8,10,1171,55076,3927,0.0331,17.2,ok,
