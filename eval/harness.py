@@ -148,6 +148,7 @@ def start_game(binary: Path, stack: Path):
 
 def child_env():
     env = dict(os.environ)
+    env.pop("PWD", None)  # opencode takes its project from PWD, not the process's directory
     for k in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "CLAUDE_PID",
               "BAKER_EVAL_ANTHROPIC_KEY"):
         env.pop(k, None)
@@ -208,16 +209,18 @@ def run_opencode(args, arm, base, stack, binary, system, prompt, port):
            "autoupdate": False, "share": "disabled", "instructions": [str(base / "system.md")],
            "tools": {t: False for t in off},
            "permission": {"edit": "deny" if arm != "cli" else "allow",
-                          "bash": "deny" if arm != "cli" else "allow", "webfetch": "deny"}}
+                          "bash": "deny" if arm != "cli" else "allow", "webfetch": "deny",
+                          "external_directory": "deny"}}
     if arm != "cli":
         cfg["mcp"] = {"baker": {"type": "local", "enabled": True,
                                 "command": [sys.executable, *server_args(args, binary, stack, arm, port)],
                                 "environment": {"PYTHONPATH": str(HERE.parent)}}}
     (stack / "opencode.json").write_text(json.dumps(cfg, indent=1))
     env = child_env()
-    env.update(HOME=str(home), ANTHROPIC_API_KEY=os.environ["BAKER_EVAL_ANTHROPIC_KEY"],
+    env.update(HOME=str(home), PWD=str(stack), ANTHROPIC_API_KEY=os.environ["BAKER_EVAL_ANTHROPIC_KEY"],
                OPENCODE_DISABLE_AUTOUPDATE="1")
-    cmd = [args.opencode, "run", "--format", "json", "-m", f"anthropic/{args.model}", "--auto", prompt]
+    cmd = [args.opencode, "run", "--format", "json", "-m", f"anthropic/{args.model}", "--auto",
+           "--dir", str(stack), prompt]
     out, stop = launch(cmd, stack, env, args.timeout)
     (stack / "opencode.json").unlink(missing_ok=True)
     calls, steps, tok, cost, text = 0, 0, dict(i=0, o=0, r=0, w=0), 0.0, ""
@@ -244,7 +247,8 @@ def run_opencode(args, arm, base, stack, binary, system, prompt, port):
 
 def launch(cmd, cwd, env, timeout):
     try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+                           stdin=subprocess.DEVNULL)  # opencode waits on an open stdin
         return p.stdout, "ok"
     except subprocess.TimeoutExpired as e:
         out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
@@ -277,7 +281,8 @@ def run_one(task, arm, n, args):
             assert console.ask(f"config.set {path} {value}")["ok"], (tag, path)
     pre = PREAMBLE[arm]
     if live:
-        pre += "\n\n" + LIVE[arm].format(port=port, console=args.baker_dev / "stacks/tools/console.py")
+        shutil.copy(args.baker_dev / "stacks/tools/console.py", stack / "console.py")
+        pre += "\n\n" + LIVE[arm].format(port=port, console="console.py")
     system = pre + "\n\n" + skill
     prompt = task["ask"] + "\nWhen you are done, reply with a short report for the person, as the skill says."
     if arm == "cli":
