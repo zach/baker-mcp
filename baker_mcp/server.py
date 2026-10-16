@@ -28,7 +28,9 @@ AGENT_LAYER = Path("data") / "agent.dta"
 
 @dataclass
 class Game:
-    """One Baker game: its binary, the directory it runs from, and its console port."""
+    """One Baker game: its binary, its directory (holding data/, sim/ and metrics/), and
+    its console port. Every command is given `--data DIR/data`, so the game reads this
+    directory and not the data the binary was built with."""
 
     binary: Path
     directory: Path
@@ -44,7 +46,7 @@ class Game:
     def run(self, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
-                [str(self.binary), *args],
+                [str(self.binary), *args, "--data", str(self.directory / "data")],
                 cwd=self.directory,
                 capture_output=True,
                 text=True,
@@ -137,7 +139,7 @@ def build(game: Game) -> MCPServer:
     mcp = MCPServer(
         name="baker",
         instructions=(
-            "Tools for a Baker game. Every result is the JSON Baker wrote. Start with "
+            "Tools for a Baker game. Results are what Baker wrote. Start with "
             "baker_vocabulary, propose changes with baker_propose (checked before they are "
             "kept), measure with baker_run, compare in the running game with baker_ab."
         ),
@@ -145,15 +147,16 @@ def build(game: Game) -> MCPServer:
 
     @mcp.tool()
     def baker_vocabulary() -> str:
-        """The game's functions, tweaks and shapes: `reference --json`, an object holding
-        baker.reference/1, baker.tweaks/1 and baker.shapes/1."""
+        """The game's functions, tweaks and shapes: `reference --json`, an object
+        {"reference", "tweaks", "shapes"} holding Baker's three JSON documents."""
         return game.run_ok("reference", "--json").stdout
 
     @mcp.tool()
     def baker_check() -> str:
-        """Check the game's data: baker.check/1 JSON. Errors are in the JSON; the call
-        succeeds whether or not there are any."""
-        return game.run_ok("check", ok=(0, 1)).stdout
+        """Check data, scenarios and metrics. Returns {"exit": 0 or 1, "check":
+        <baker.check/1>, "log": text}. Exit 1 means fix before anything else; shape errors
+        and undefined calls are named in "log", which Baker writes beside the JSON."""
+        return checked(game.run_ok("check", ok=(0, 1)))
 
     @mcp.tool()
     def baker_explain(path: str) -> str:
@@ -170,8 +173,9 @@ def build(game: Game) -> MCPServer:
     @mcp.tool()
     def baker_propose(text: str) -> str:
         """Replace the agent layer, data/agent.dta, with `text`, and keep it only if
-        `check` passes. Otherwise the old file is restored. Returns
-        {"kept": bool, "check": <baker.check/1>}."""
+        `check` passes. Otherwise the old file is restored. Returns {"kept": bool,
+        "exit", "check", "log"} as baker_check does. A running game may reload the file
+        while it is checked."""
         target = game.own_path(str(AGENT_LAYER))
         old = target.read_bytes() if target.exists() else None
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -186,16 +190,23 @@ def build(game: Game) -> MCPServer:
         kept = p.returncode == 0
         if not kept:
             restore(target, old)
-        return wrap(kept=kept, check=Raw(p.stdout))
+        return "{" + f'"kept": {json.dumps(kept)}, ' + checked(p)[1:]
 
     @mcp.tool()
     def baker_run(scenario: str | None = None, seeds: str | None = None, before: str | None = None) -> str:
-        """Run scenarios headless: `sim [--scenario NAME] [--seeds A-B] --out DIR`.
+        """Run scenarios headless and judge them by the objectives:
+        `sim [--scenario NAME] [--seeds A-B] --out DIR`.
 
-        `seeds` is a range like "1-20". Each run goes to its own directory under runs/,
-        named in the result as "out". Pass a previous run's "out" as `before` to get
-        `diff` between that run and this one. "exit": 0 all objectives passed, 1 one
-        failed, 2 the run could not run."""
+        `seeds` is a range like "1-10". Each run is kept under runs/, named in the
+        result's "out". Pass an earlier run's "out" as `before` to get its summary beside
+        this one's. Returns {"exit", "result", "out", "output", "before"}: "exit" 0 all
+        objectives passed, 1 one failed, 2 something could not run; "output" is sim's
+        text, ending with the summary (Baker's .dta)."""
+        prev = None
+        if before:
+            prev = game.own_path(before, "summary.dta")
+            if not prev.is_relative_to(game.own_path("runs")) or not prev.exists():
+                raise ToolError(f"no run at {before}")
         out = game.own_path("runs", stamp())
         args = ["sim"]
         if scenario:
@@ -206,18 +217,14 @@ def build(game: Game) -> MCPServer:
             args += ["--seeds", seeds]
         p = game.run(*args, "--out", str(out), timeout=game.sim_timeout)
         meaning = {0: "passed", 1: "failed", 2: "could not run"}.get(p.returncode, "unknown")
-        compared = None
-        if before and p.returncode in (0, 1):
-            prev = game.own_path(before)
-            compared = Raw(game.run_ok("diff", str(prev), str(out), ok=(0, 1)).stdout)
-        rel = str(out.relative_to(game.directory.resolve()))
-        return wrap(exit=p.returncode, result=meaning, out=rel, sim=Raw(p.stdout or p.stderr), diff=compared)
+        return wrap(exit=p.returncode, result=meaning, out=str(out.relative_to(game.directory.resolve())),
+                    output=p.stdout + p.stderr, before=prev.read_text(encoding="utf-8") if prev else None)
 
     @mcp.tool()
     def baker_ab(action: str, name: str | None = None) -> str:
-        """A/B in the running game. `action` is "toggle" (switch the agent layer on or
-        off), "snapshot" (save the state as `name`) or "restore" (return to `name`).
-        Returns baker.reply/1."""
+        """A/B in the running game. `action` is "toggle" (switch the agent layer off or
+        on; the value is 1 if it is now on), "snapshot" (save the whole state as `name`)
+        or "restore" (return to `name`). Returns baker.reply/1."""
         if action == "toggle":
             return game.request("config.toggle agent")
         if action in ("snapshot", "restore"):
@@ -227,21 +234,25 @@ def build(game: Game) -> MCPServer:
         raise ToolError(f"action is toggle, snapshot or restore, not {action!r}")
 
     @mcp.tool()
-    def baker_session() -> str:
-        """The running game's session: {"journal", "unsaved", "loop"}, each the
-        baker.reply/1 of `config.journal`, `config.unsaved` and `config.loop`."""
-        return wrap(**{k: Raw(game.request(f"config.{k}")) for k in ("journal", "unsaved", "loop")})
+    def baker_session(since_ns: int | None = None) -> str:
+        """What the person changed in the running game: {"journal", "unsaved", "loop"},
+        each the baker.reply/1 of `config.journal [since_ns]`, `config.unsaved` and
+        `config.loop`."""
+        journal = "config.journal" + (f" {int(since_ns)}" if since_ns is not None else "")
+        return wrap(journal=Raw(game.request(journal)), unsaved=Raw(game.request("config.unsaved")),
+                    loop=Raw(game.request("config.loop")))
 
     @mcp.tool()
     def baker_promote_preview() -> str:
-        """What promoting the agent layer would change, from `promote` without --write.
-        Writes it to patches/ for a person to review and apply; never applies it.
-        Returns {"patch": path, "change": text}."""
-        p = game.run_ok("promote")
-        out = game.own_path("patches", f"promote-{stamp()}.patch")
+        """What promoting the agent layer into default would write, from `promote --to
+        default` without --write: one line per path, old value -> new value, and where.
+        Saved under patches/ for a person to review; never applied. Returns
+        {"file": path, "preview": text}."""
+        p = game.run_ok("promote", "--to", "default")
+        out = game.own_path("patches", f"promote-{stamp()}.txt")
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(p.stdout, encoding="utf-8")
-        return wrap(patch=str(out.relative_to(game.directory.resolve())), change=p.stdout)
+        return wrap(file=str(out.relative_to(game.directory.resolve())), preview=p.stdout)
 
     @mcp.resource("baker://vocabulary", mime_type="application/json", description="reference --json")
     def vocabulary() -> str:
@@ -256,6 +267,10 @@ def build(game: Game) -> MCPServer:
     return mcp
 
 
+def checked(p: subprocess.CompletedProcess[str]) -> str:
+    return wrap(exit=p.returncode, check=Raw(p.stdout), log=p.stderr)
+
+
 def restore(target: Path, old: bytes | None) -> None:
     if old is None:
         target.unlink(missing_ok=True)
@@ -268,7 +283,7 @@ def restore(target: Path, old: bytes | None) -> None:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="baker-mcp", description=__doc__.splitlines()[0])
     ap.add_argument("--game", required=True, type=Path, help="the game's binary")
-    ap.add_argument("--dir", type=Path, default=Path.cwd(), help="the directory the game runs from")
+    ap.add_argument("--dir", type=Path, default=Path.cwd(), help="the game's directory, holding data/, sim/ and metrics/")
     ap.add_argument("--port", type=int, help="the running game's console port, on 127.0.0.1")
     ap.add_argument("--skill", type=Path, help="the stack's agent skill text")
     a = ap.parse_args(argv)

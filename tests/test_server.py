@@ -23,13 +23,14 @@ def test_tools_listed(fake):
 
 def test_vocabulary_is_bakers_json(fake):
     v = call_json(fake, "baker_vocabulary")
-    assert set(v) == {"baker.reference/1", "baker.tweaks/1", "baker.shapes/1"}
+    assert set(v) == {"reference", "tweaks", "shapes"}
     assert json.loads(read(fake, "baker://vocabulary")) == v
 
 
 def test_check_returns_errors_without_failing(fake):
     (fake.directory / "data/agent.dta").write_text("(x {undefined_fn})")
-    assert call_json(fake, "baker_check")["errors"]
+    r = call_json(fake, "baker_check")
+    assert r["exit"] == 1 and r["check"]["errors"] and "undefined_fn" in r["log"]
 
 
 def test_explain_headless_is_text(fake):
@@ -44,7 +45,7 @@ def test_explain_refuses_non_paths(fake):
 
 def test_propose_keeps_a_passing_candidate(fake):
     r = call_json(fake, "baker_propose", text="(spread 3)")
-    assert r["kept"] and r["check"]["format"] == "baker.check/1"
+    assert r["kept"] and r["exit"] == 0 and r["check"]["schema"] == "baker.check/1"
     assert (fake.directory / "data/agent.dta").read_text() == "(spread 3)"
 
 
@@ -64,24 +65,26 @@ def test_propose_removes_a_new_failing_file(fake):
 
 def test_run_and_compare(fake):
     a = call_json(fake, "baker_run", scenario="opening", seeds="1-5")
-    assert a["exit"] == 0 and a["result"] == "passed"
-    assert a["sim"]["args"][:4] == ["--scenario", "opening", "--seeds", "1-5"]
+    assert a["exit"] == 0 and a["result"] == "passed" and a["before"] is None
+    assert a["output"].startswith("args --scenario opening --seeds 1-5 --out")
     (fake.directory / "data/agent.dta").write_text("fail")
     b = call_json(fake, "baker_run", before=a["out"])
     assert b["exit"] == 1 and b["result"] == "failed"
-    assert b["diff"]["diff"][0].endswith(a["out"])
+    assert "(passed 1)" in b["before"] and "(passed 0)" in b["output"]
 
 
 def test_run_rejects_bad_seeds_and_escapes(fake):
     assert call(fake, "baker_run", seeds="1-5; rm")[0]
     assert call(fake, "baker_run", before="../../etc")[0]
+    assert call(fake, "baker_run", before="data")[0]
 
 
 def test_promote_preview_writes_a_patch_and_never_promotes(fake):
     (fake.directory / "data/agent.dta").write_text("(spread 3)")
     r = call_json(fake, "baker_promote_preview")
-    patch = fake.directory / r["patch"]
-    assert patch.parent.name == "patches" and "(spread 3)" in patch.read_text()
+    saved = fake.directory / r["file"]
+    assert saved.parent.name == "patches" and saved.read_text() == r["preview"]
+    assert r["preview"].startswith("would write into default") and "(spread 3)" in r["preview"]
     assert not (fake.directory / "PROMOTED").exists()
 
 
@@ -99,10 +102,11 @@ def test_live_tools_without_a_game_are_errors(fake):
 
 def test_live_explain_ab_and_session(fake_live):
     r = call_json(fake_live, "baker_explain", path="duel.spread")
-    assert r["format"] == "baker.reply/1" and r["value"]["arg"] == "duel.spread"
+    assert r["schema"] == "baker.reply/1" and r["value"]["arg"] == "duel.spread"
     assert call_json(fake_live, "baker_ab", action="toggle")["value"] == {"agent": False}
     assert call_json(fake_live, "baker_ab", action="snapshot", name="before")["value"] == {"snapshot": "before"}
     assert call(fake_live, "baker_ab", action="restore", name="x y")[0]
+    assert call_json(fake_live, "baker_session", since_ns=5)["journal"]["value"]["arg"] == "5"
     s = call_json(fake_live, "baker_session")
     assert {k: v["value"]["command"] for k, v in s.items()} == {
         "journal": "config.journal", "unsaved": "config.unsaved", "loop": "config.loop"}
@@ -126,4 +130,4 @@ def test_stdio_end_to_end(fake):
         async with Client(params) as c:
             return (await c.call_tool("baker_check", {})).content[0].text
 
-    assert json.loads(asyncio.run(go()))["format"] == "baker.check/1"
+    assert json.loads(asyncio.run(go()))["check"]["schema"] == "baker.check/1"

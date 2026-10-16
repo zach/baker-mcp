@@ -10,7 +10,7 @@ import socket
 import sys
 from pathlib import Path
 
-AGENT = Path("data/agent.dta")
+AGENT = Path("data/agent.dta")  # under --data's parent, set in main
 
 
 def agent_text():
@@ -19,7 +19,9 @@ def agent_text():
 
 def check():
     errors = [{"message": "call to undefined function"}] if "undefined_fn" in agent_text() else []
-    print(json.dumps({"format": "baker.check/1", "errors": errors}))
+    print(json.dumps({"schema": "baker.check/1", "errors": errors}, indent=2))
+    if errors:
+        print("check: 'undefined_fn' is not defined (agent.dta:1)", file=sys.stderr)
     return 1 if errors else 0
 
 
@@ -32,7 +34,7 @@ def reply(rid, command, state):
         value = {name.split(".")[1]: arg}
     else:
         value = {"command": name, "arg": arg}
-    return json.dumps({"format": "baker.reply/1", "id": rid, "ok": True, "value": value})
+    return json.dumps({"schema": "baker.reply/1", "id": rid, "ok": True, "text": "", "value": value})
 
 
 def console(port):
@@ -45,7 +47,7 @@ def console(port):
             for line in f:
                 m = re.fullmatch(r"\((\d+) \{(.*)\}\)\s*", line)
                 if not m:
-                    f.write(json.dumps({"format": "baker.reply/1", "ok": False}) + "\n\n")
+                    f.write(json.dumps({"schema": "baker.reply/1", "id": None, "ok": False}) + "\n\n")
                 elif m.group(2) == "quit":
                     return 0
                 else:
@@ -56,9 +58,14 @@ def console(port):
 def main(argv):
     if "--console-port" in argv:
         return console(int(argv[argv.index("--console-port") + 1]))
+    global AGENT
     cmd, args = argv[0], argv[1:]
+    if "--data" in args:
+        i = args.index("--data")
+        AGENT = Path(args[i + 1]) / "agent.dta"
+        del args[i:i + 2]
     if cmd == "reference":
-        print(json.dumps({"baker.reference/1": {}, "baker.tweaks/1": {}, "baker.shapes/1": {}}))
+        print(json.dumps({"reference": {"schema": "baker.reference/1"}, "tweaks": {}, "shapes": {}}))
     elif cmd == "check":
         return check()
     elif cmd == "eval":
@@ -67,16 +74,17 @@ def main(argv):
         out = Path(args[args.index("--out") + 1])
         out.mkdir(parents=True)
         passed = "fail" not in agent_text()
-        (out / "result.json").write_text(json.dumps({"passed": passed, "args": args}))
-        print(json.dumps({"passed": passed, "args": args}))
+        summary = f"(summary (runs 1) (passed {int(passed)}) (failed {int(not passed)}))\n"
+        (out / "summary.dta").write_text(summary)
+        print(f"args {' '.join(args)}\n" + summary, end="")
         return 0 if passed else 1
     elif cmd == "diff":
-        print(json.dumps({"diff": [args[0], args[1]]}))
+        print("agent.dta changes:\n  " + agent_text())
     elif cmd == "promote":
         if "--write" in args:
             Path("PROMOTED").write_text("never")
             return 9
-        print("--- a/data/default.dta\n+++ b/data/default.dta\n" + agent_text())
+        print(f"would write into {args[args.index('--to') + 1]} (rerun with --write to write):\n  " + agent_text())
     else:
         print(f"unknown command {cmd}", file=sys.stderr)
         return 2
