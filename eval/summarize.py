@@ -1,11 +1,20 @@
-"""Summarizes eval/results.csv per arm and per task, as Markdown."""
+"""Summarizes a results file per arm and per task, as Markdown.
+
+    python3 eval/summarize.py [eval/results.csv]
+
+Rows with a client and set (results-2.csv) are grouped by client, set and arm.
+"""
 import csv
 import statistics as st
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-rows = list(csv.DictReader(open(Path(__file__).with_name("results.csv"))))
+src = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name("results.csv")
+rows = [r for r in csv.DictReader(open(src)) if r["success"] in ("0", "1")]
+for r in rows:
+    if r.get("client"):
+        r["arm"] = f"{r['client']} {r['set']} {r['arm']}"
 num = lambda r, k: float(r[k] or 0)
 
 
