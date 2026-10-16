@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  BAKER_DEV_COMMIT: 621fcd3  # baker-dev main; no Baker release has the tool surface yet
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # baker-dev, read-only, at the pinned commit. A private repository needs a token
+      # with read access in the BAKER_DEV_TOKEN secret.
+      - uses: actions/checkout@v4
+        with:
+          repository: zach/baker-dev
+          ref: ${{ env.BAKER_DEV_COMMIT }}
+          path: baker-dev
+          token: ${{ secrets.BAKER_DEV_TOKEN || github.token }}
+          fetch-depth: 0
+
+      - name: Harness dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Build the stacks, as baker-dev's CI does
+        working-directory: baker-dev
+        run: |
+          cmake -S stacks -B build-stacks -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-stacks
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -e '.[test]'
+
+      - name: Tests (stand-in and the real stacks)
+        env:
+          BAKER_STACKS: ${{ github.workspace }}/baker-dev
+        run: python -m pytest -v
