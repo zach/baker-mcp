@@ -81,3 +81,10 @@ def test_live_cube(tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_duel_eval_when_asked(tmp_path):
+    g = stack("duel", tmp_path)
+    g.with_eval = True
+    r = call_json(g, "baker_eval", commands=["{duel.frame_table}"])
+    assert r["exit"] == 0 and r["output"].strip(), r

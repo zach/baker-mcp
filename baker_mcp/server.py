@@ -36,6 +36,7 @@ class Game:
     directory: Path
     port: int | None = None
     skill: Path | None = None
+    with_eval: bool = False  # the optional baker_eval tool: evidence for the plan, off by default
     timeout: float = 120.0
     sim_timeout: float = 900.0
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
@@ -255,6 +256,20 @@ def build(game: Game) -> MCPServer:
         out.write_text(p.stdout, encoding="utf-8")
         return wrap(file=str(out.relative_to(game.directory.resolve())), preview=p.stdout)
 
+    if game.with_eval:
+
+        @mcp.tool()
+        def baker_eval(commands: list[str], seed: int = 1) -> str:
+            """Commands on the data and the reset game, headless: `eval [--seed N]
+            "{cmd}"...`, as a console would run them (a frame table, a search, a report).
+            Each command is one `{...}`. Returns {"exit", "output", "log"}: one line of
+            Baker text per command in "output"; exit 1 if a command failed (see "log")."""
+            for c in commands:
+                if not (c.startswith("{") and c.endswith("}")) or "\n" in c:
+                    raise ToolError(f"a command is one line in braces, not {c!r}")
+            p = game.run_ok("eval", "--seed", str(int(seed)), *commands, ok=(0, 1, 2))
+            return wrap(exit=p.returncode, output=p.stdout, log=p.stderr)
+
     @mcp.resource("baker://vocabulary", mime_type="application/json", description="reference --json")
     def vocabulary() -> str:
         return game.run_ok("reference", "--json").stdout
@@ -287,9 +302,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dir", type=Path, default=Path.cwd(), help="the game's directory, holding data/, sim/ and metrics/")
     ap.add_argument("--port", type=int, help="the running game's console port, on 127.0.0.1")
     ap.add_argument("--skill", type=Path, help="the stack's agent skill text")
+    ap.add_argument("--with-eval", action="store_true", help="add baker_eval (headless eval)")
     a = ap.parse_args(argv)
     game = Game(binary=a.game.resolve(), directory=a.dir.resolve(), port=a.port,
-                skill=a.skill.resolve() if a.skill else None)
+                skill=a.skill.resolve() if a.skill else None, with_eval=a.with_eval)
     build(game).run("stdio")
 
 

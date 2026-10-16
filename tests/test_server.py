@@ -131,3 +131,15 @@ def test_stdio_end_to_end(fake):
             return (await c.call_tool("baker_check", {})).content[0].text
 
     assert json.loads(asyncio.run(go()))["check"]["schema"] == "baker.check/1"
+
+
+def test_eval_is_off_unless_asked(fake):
+    err, text = call(fake, "baker_eval", commands=["{x}"])
+    assert err
+
+
+def test_eval_when_asked(fake):
+    fake.with_eval = True
+    r = call_json(fake, "baker_eval", commands=["{duel.frame_table}"], seed=3)
+    assert r["exit"] == 0 and r["output"].startswith("explain (text): --seed")
+    assert call(fake, "baker_eval", commands=["duel.frame_table"])[0]
