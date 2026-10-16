@@ -153,10 +153,11 @@ def build(game: Game) -> MCPServer:
 
     @mcp.tool()
     def baker_check() -> str:
-        """Check data, scenarios and metrics. Returns {"exit": 0 or 1, "check":
-        <baker.check/1>, "log": text}. Exit 1 means fix before anything else; shape errors
-        and undefined calls are named in "log", which Baker writes beside the JSON."""
-        return checked(game.run_ok("check", ok=(0, 1)))
+        """Check data, scenarios and metrics. Returns {"exit", "check": <baker.check/1>,
+        "log": text}. Exit 1: errors, fix them first; 2: the data did not load (no JSON,
+        see "log"). Load messages, shape errors and undefined calls are in "log", which
+        Baker writes beside the JSON: read it even when exit is 0."""
+        return checked(game.run_ok("check", ok=(0, 1, 2)))
 
     @mcp.tool()
     def baker_explain(path: str) -> str:
@@ -183,7 +184,7 @@ def build(game: Game) -> MCPServer:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, target)
         try:
-            p = game.run_ok("check", ok=(0, 1))
+            p = game.run_ok("check", ok=(0, 1, 2))
         except BaseException:
             restore(target, old)
             raise
@@ -268,7 +269,7 @@ def build(game: Game) -> MCPServer:
 
 
 def checked(p: subprocess.CompletedProcess[str]) -> str:
-    return wrap(exit=p.returncode, check=Raw(p.stdout), log=p.stderr)
+    return wrap(exit=p.returncode, check=Raw(p.stdout) if p.stdout.strip() else None, log=p.stderr)
 
 
 def restore(target: Path, old: bytes | None) -> None:

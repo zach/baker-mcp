@@ -17,7 +17,7 @@ from conftest import call, call_json, free_port, read, start_console
 ROOT = Path(os.environ["BAKER_STACKS"]) if os.environ.get("BAKER_STACKS") else None
 pytestmark = pytest.mark.skipif(ROOT is None, reason="BAKER_STACKS is not set")
 
-BROKEN = "#autorun {func agent.broken () {not_a_function_anywhere}}\n"
+BROKEN = "(cube (spin {not_a_function_anywhere}))\n"
 
 
 def stack(name, tmp_path):
@@ -41,6 +41,9 @@ def test_headless(name, tmp_path):
     r = call_json(g, "baker_propose", text=BROKEN)
     assert r["kept"] is False and r["exit"] == 1
     assert "not_a_function_anywhere" in json.dumps(r["check"]["demand"])
+    assert (agent.read_bytes() if agent.exists() else None) == before
+    r = call_json(g, "baker_propose", text="(cube (spin\n")
+    assert r["kept"] is False and r["exit"] == 2 and r["check"] is None and "never closed" in r["log"]
     assert (agent.read_bytes() if agent.exists() else None) == before
 
     run = call_json(g, "baker_run", seeds="1-2")
