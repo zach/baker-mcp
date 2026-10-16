@@ -37,6 +37,21 @@ FetchContent_Declare(baker GIT_REPOSITORY https://github.com/zach/baker.git GIT_
 FetchContent_MakeAvailable(baker)
 ```
 
+## Running
+
+```
+pip install -e .
+baker-mcp --game PATH/stacks_duel --dir PATH/stacks/duel [--port 4567] [--skill PATH/SKILL.md]
+```
+
+`--dir` is the game's directory (data/, sim/, metrics/); every command is given its
+`data/`. `--port` is a running game's console, started with `--console-port`; the server
+connects only to 127.0.0.1. Tests: `pytest`; set `BAKER_STACKS` to a baker-dev checkout
+with its stacks built to run them against the real games. The evaluation is in `eval/`.
+
+No Baker release has the commands this server drives yet; it is tested against baker-dev
+621fcd3.
+
 ## Requirements for Baker
 
 When this integration needs something Baker lacks, write it down in `requirements/` from
