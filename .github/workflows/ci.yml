@@ -5,7 +5,7 @@ on:
   pull_request:
 
 env:
-  BAKER_DEV_COMMIT: 621fcd3  # baker-dev main; no Baker release has the tool surface yet
+  BAKER_DEV_COMMIT: 621fcd34fba332632b1cc75666ceafccb516eb9d  # baker-dev main; no Baker release has the tool surface yet
 
 jobs:
   test:
@@ -21,7 +21,6 @@ jobs:
           ref: ${{ env.BAKER_DEV_COMMIT }}
           path: baker-dev
           token: ${{ secrets.BAKER_DEV_TOKEN || github.token }}
-          fetch-depth: 0
 
       - name: Harness dependencies
         run: |
